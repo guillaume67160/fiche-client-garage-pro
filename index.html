@@ -6,6 +6,8 @@
   <title>GC PERFORMANCE — Garages</title>
 
   <link rel="icon" type="image/png" href="gc_performance_icon_1024.png" />
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#ef233c">
 
   <!-- Firebase (App + Firestore en compat) -->
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -647,7 +649,6 @@
   let currentChecks = {}, currentComments = {}, currentPneus = [];
   let editorAutoBound = false;
 
-  /* ==== Utilitaires ==== */
   function showBanner(msg){
     const b=document.getElementById('banner');
     if(msg){
@@ -688,7 +689,6 @@
       const snap = await docRef.get();
 
       if(!snap.exists){
-        // Création du garage
         const data = {
           code,
           name: code,
@@ -706,22 +706,27 @@
           return;
         }
         currentGarageData = data;
+        if(!Array.isArray(currentGarageData.mechanics)){
+          currentGarageData.mechanics = [];
+        }
+        if(!currentGarageData.mechanics.includes(mech)){
+          currentGarageData.mechanics.push(mech);
+          await docRef.set({ mechanics: currentGarageData.mechanics }, { merge: true });
+        }
       }
 
       currentGarageId = code;
       currentMechanicName = mech;
 
-      // Mémoriser pour cet appareil
       localStorage.setItem('gcperf_garage_code', code);
       localStorage.setItem('gcperf_garage_mech', mech);
 
-      // Passer en mode app
       document.getElementById('loginScreen').classList.add('hidden');
       document.getElementById('appHeader').classList.remove('hidden');
       document.getElementById('appMain').classList.remove('hidden');
 
       document.getElementById('headerGarageName').textContent =
-        currentGarageData.name + " ("+currentGarageId+")";
+        (currentGarageData.name || currentGarageId) + " ("+currentGarageId+")";
 
       initGarageUI();
       initRealtime();
@@ -750,7 +755,6 @@
   }
 
   function initGarageUI(){
-    // Settings
     document.getElementById('s_garageName').value = currentGarageData.name || currentGarageId;
     document.getElementById('s_garageCode').value = currentGarageId;
 
@@ -776,7 +780,7 @@
       pill.className = 'mech-pill';
       pill.innerHTML = `
         <span>${name}</span>
-        <button onclick="removeMechanic('${name.replace(/'/g,"\\'")}')">✕</button>
+        <button onclick="removeMechanic('${name.replace(/'/g,"\\\\'")}')">✕</button>
       `;
       wrap.appendChild(pill);
     });
@@ -796,7 +800,6 @@
       opt.textContent=m;
       sel.appendChild(opt);
     });
-    // Pré-sélectionner mécano courant si présent
     if(currentMechanicName && mechs.includes(currentMechanicName)){
       sel.value = currentMechanicName;
     }
@@ -827,7 +830,7 @@
     currentGarageData.name = name;
     await getGarageDocRef().set(currentGarageData,{merge:true});
     document.getElementById('headerGarageName').textContent =
-      currentGarageData.name + " ("+currentGarageId+")";
+      (currentGarageData.name || currentGarageId) + " ("+currentGarageId+")";
     alert("Paramètres du garage enregistrés ✅");
   }
 
@@ -852,7 +855,6 @@
       });
   }
 
-  /* ==== TIMER ==== */
   function formatDuration(ms){
     if(!ms || ms<0) ms=0;
     const sec=Math.floor(ms/1000);
@@ -953,7 +955,6 @@
     document.getElementById('empty').classList.toggle('hidden',n>0);
   }
 
-  /* ==== AUTOSAVE ==== */
   function scheduleAutoSave(){
     const immat=(document.getElementById('f_immat')?.value||"").trim().toUpperCase();
     if(!immat || !currentGarageId) return;
@@ -961,7 +962,6 @@
     autoSaveTimer=setTimeout(()=>saveFiche(true),1000);
   }
 
-  /* ==== ÉDITEUR ==== */
   function setupCarnet(checks){
     const okEl=document.getElementById('ce_ok');
     const badEl=document.getElementById('ce_bad');
@@ -999,8 +999,8 @@
       document.getElementById('f_date').value=it.date||"";
       document.getElementById('f_client').value=it.client||"";
       document.getElementById('f_status').value=it.status||"en_cours";
-      document.getElementById('f_todoNow').value=(it.todoNow||[]).join("\n");
-      document.getElementById('f_todoLater').value=(it.todoLater||[]).join("\n");
+      document.getElementById('f_todoNow').value=(it.todoNow||[]).join("\\n");
+      document.getElementById('f_todoLater').value=(it.todoLater||[]).join("\\n");
       document.getElementById('f_obs').value=it.obs||"";
 
       if(it.mech){
@@ -1043,7 +1043,6 @@
     renderList();
   }
 
-  /* ==== SAVE FICHE ==== */
   async function saveFiche(auto=false){
     if(!currentGarageId) return;
     const immat=document.getElementById('f_immat').value.trim().toUpperCase();
@@ -1074,8 +1073,8 @@
       client:document.getElementById('f_client').value,
       mech:document.getElementById('f_mech').value || '',
       status:document.getElementById('f_status').value,
-      todoNow:document.getElementById('f_todoNow').value.split("\n").map(s=>s.trim()).filter(Boolean),
-      todoLater:document.getElementById('f_todoLater').value.split("\n").map(s=>s.trim()).filter(Boolean),
+      todoNow:document.getElementById('f_todoNow').value.split("\\n").map(s=>s.trim()).filter(Boolean),
+      todoLater:document.getElementById('f_todoLater').value.split("\\n").map(s=>s.trim()).filter(Boolean),
       obs:document.getElementById('f_obs').value,
       checks:currentChecks,
       comments:currentComments,
@@ -1096,7 +1095,6 @@
     }
   }
 
-  /* ==== DELETE ==== */
   async function deleteFiche(){
     if(!currentId || !currentGarageId) return;
     if(!confirm("Supprimer cette fiche ?")) return;
@@ -1109,7 +1107,6 @@
     await getFichesColRef().doc(id).delete();
   }
 
-  /* ==== PIÈCES ==== */
   function addPartRow(ref="",label="",qte="1"){
     const tr=document.createElement('tr');
     tr.innerHTML=`
@@ -1121,7 +1118,6 @@
     document.getElementById('partsBody').appendChild(tr);
   }
 
-  /* ==== CHECKLIST ==== */
   const DEF=[
     {icon:"👁️",cat:"VISIBILITÉ",items:["Balais AV/AR","Pare-brise","Rétroviseurs"]},
     {icon:"💡",cat:"ÉCLAIRAGE",items:["Position","Croisement","Route","Stop","Antibrouillard AV/AR","Recul","Clignotants","Détresse"]},
@@ -1205,7 +1201,6 @@
     });
   }
 
-  /* ==== PNEUS ==== */
   const POS=["AVG","AVD","ARG","ARD","RS"];
   function buildTires(arr){
     currentPneus=JSON.parse(JSON.stringify(arr||[]));
@@ -1261,16 +1256,14 @@
     chev.textContent=collapsed?'►':'▼';
   }
 
-  /* ==== EXPORT JSON ==== */
   function exportJSON(){
     const blob=new Blob([JSON.stringify(itemsCache,null,2)],{type:"application/json"});
     const a=document.createElement('a');
     a.href=URL.createObjectURL(blob);
-    a.download=currentGarageId+"_fiches_backup.json";
+    a.download=(currentGarageId||"garage")+"_fiches_backup.json";
     a.click();
   }
 
-  /* ==== AUTO-RECONNEXION SI GARAGE ENREGISTRÉ ==== */
   window.addEventListener('load',()=>{
     const savedCode = localStorage.getItem('gcperf_garage_code');
     const savedMech = localStorage.getItem('gcperf_garage_mech');
@@ -1279,6 +1272,12 @@
       document.getElementById('g_mech').value = savedMech;
     }
   });
+
+  if ('serviceWorker' in navigator){
+    navigator.serviceWorker.register('sw.js').catch(err=>{
+      console.warn('SW registration failed',err);
+    });
+  }
 </script>
 </body>
 </html>
