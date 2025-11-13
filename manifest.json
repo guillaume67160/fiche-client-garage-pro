@@ -1,0 +1,21 @@
+{
+  "name": "GC Performance - Fiches garages",
+  "short_name": "GC Garages",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#050816",
+  "theme_color": "#ef233c",
+  "icons": [
+    {
+      "src": "gc_performance_icon_1024.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "gc_performance_icon_1024.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
