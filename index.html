@@ -387,6 +387,30 @@
       font-size:.7rem;
     }
 
+    /* Modal activation */
+    #activationOverlay{
+      position:fixed;
+      inset:0;
+      background:rgba(0,0,0,0.75);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      z-index:9999;
+    }
+    #activationBox{
+      background:rgba(15,23,42,0.96);
+      border-radius:14px;
+      border:1px solid rgba(248,113,113,0.7);
+      padding:18px 16px 14px;
+      width:320px;
+      box-shadow:0 20px 50px rgba(0,0,0,0.8);
+      text-align:left;
+    }
+
+    /* Admin panel */
+    #adminPanel{margin-top:10px;}
+    #adminPanel small{font-size:.8rem;}
+
     @media (max-width:700px){
       .header-main h1{font-size:1.35rem}
       .brand-logo{width:32px;height:32px}
@@ -401,7 +425,7 @@
         background:#ffffff !important;
         color:#000 !important;
       }
-      header,#loginScreen,#settingsPanel,.no-print{display:none !important}
+      header,#loginScreen,#settingsPanel,#adminPanel,#activationOverlay,.no-print{display:none !important}
       .card{
         background:#fff !important;
         border:1px solid #ccc !important;
@@ -432,16 +456,34 @@
       <label>PIN garage</label>
       <input id="g_pin" type="password" placeholder="Choix libre (4–8 chiffres)">
     </div>
-    <div class="field">
-      <label>Nom du mécano</label>
-      <input id="g_mech" placeholder="Prénom mécano">
-    </div>
     <button class="primary" style="width:100%;margin-top:6px;" onclick="loginGarage()">
       Entrer dans le garage
     </button>
     <p id="loginErr" style="color:#fecaca;font-size:.83rem;margin-top:8px;display:none;"></p>
     <p style="font-size:.78rem;margin-top:10px;opacity:.65;">
       Premier accès : le garage sera créé automatiquement avec ce code et ce PIN.
+    </p>
+
+    <button style="margin-top:10px;font-size:.8rem;" onclick="enterAdminMode()">🔑 Mode admin</button>
+  </div>
+</div>
+
+<!-- MODAL ACTIVATION -->
+<div id="activationOverlay" class="hidden">
+  <div id="activationBox">
+    <h3 style="margin:0 0 6px;color:#fecaca;font-size:1rem;">Activation du compte garage</h3>
+    <p style="margin:0 0 10px;font-size:.85rem;opacity:.85;">
+      Ce garage n'est pas encore activé. Entre un code d'activation pour débloquer toutes les fonctions.
+    </p>
+    <label style="font-size:.8rem;opacity:.9;">Code d'activation</label>
+    <input id="activationCode" placeholder="Code (ex : 08092012)" style="width:100%;margin-top:3px;margin-bottom:6px;">
+    <p id="activationErr" style="display:none;color:#fecaca;font-size:.78rem;margin:0 0 8px;"></p>
+    <div class="row" style="justify-content:flex-end;margin-top:4px;">
+      <button onclick="skipActivation()">Plus tard</button>
+      <button class="primary" onclick="validateActivation()">Activer</button>
+    </div>
+    <p style="margin:8px 0 0;font-size:.75rem;opacity:.7;">
+      Pour le moment, le code maître est <strong>08092012</strong> (admin).
     </p>
   </div>
 </div>
@@ -491,6 +533,22 @@
 
     <div class="row" style="margin-top:14px;justify-content:flex-end;">
       <button class="primary" onclick="saveGarageSettings()">💾 Enregistrer paramètres</button>
+    </div>
+  </div>
+
+  <!-- PANEL ADMIN (SUPER ADMIN) -->
+  <div id="adminPanel" class="card hidden">
+    <h3 class="card-title">Administration (super admin)</h3>
+    <small>Accès réservé. Utilise ce panneau pour bloquer / débloquer / supprimer un garage (client qui ne paie plus, etc.).</small>
+    <div class="row" style="margin-top:10px;">
+      <input id="adminGarageCode" placeholder="Code garage (ex : GC01)">
+      <button onclick="adminLoadGarage()">Charger</button>
+    </div>
+    <div id="adminGarageInfo" style="margin-top:8px;font-size:.85rem;" class="muted"></div>
+    <div class="row" style="margin-top:10px;">
+      <button class="danger" onclick="adminBlockGarage()">🚫 Bloquer</button>
+      <button onclick="adminUnblockGarage()">✅ Débloquer</button>
+      <button class="danger" onclick="adminDeleteGarage()">🗑️ Supprimer garage</button>
     </div>
   </div>
 
@@ -638,16 +696,17 @@
   /* ==== État global ==== */
   let currentGarageId = null;
   let currentGarageData = null;
-  let currentMechanicName = null;
-
   let itemsCache = [];
   let unsubscribe = null;
   let autoSaveTimer = null;
   let nowTs = Date.now();
-
   let currentId = null;
   let currentChecks = {}, currentComments = {}, currentPneus = [];
   let editorAutoBound = false;
+
+  let isAdmin = false;
+  let adminCurrentGarageCode = null;
+  let adminCurrentGarageData = null;
 
   function showBanner(msg){
     const b=document.getElementById('banner');
@@ -671,14 +730,13 @@
   async function loginGarage(){
     const codeRaw = document.getElementById('g_code').value.trim();
     const pin = document.getElementById('g_pin').value.trim();
-    const mech = document.getElementById('g_mech').value.trim();
     const errEl = document.getElementById('loginErr');
 
     errEl.style.display='none';
     errEl.textContent='';
 
-    if(!codeRaw || !pin || !mech){
-      errEl.textContent = "Code, PIN et mécano sont obligatoires.";
+    if(!codeRaw || !pin){
+      errEl.textContent = "Code et PIN sont obligatoires.";
       errEl.style.display='block';
       return;
     }
@@ -693,7 +751,9 @@
           code,
           name: code,
           pin,
-          mechanics: [mech],
+          mechanics: [],
+          isActive: false,
+          isBlocked: false,
           createdAt: Date.now()
         };
         await docRef.set(data);
@@ -709,17 +769,23 @@
         if(!Array.isArray(currentGarageData.mechanics)){
           currentGarageData.mechanics = [];
         }
-        if(!currentGarageData.mechanics.includes(mech)){
-          currentGarageData.mechanics.push(mech);
-          await docRef.set({ mechanics: currentGarageData.mechanics }, { merge: true });
+        if(typeof currentGarageData.isActive !== "boolean"){
+          currentGarageData.isActive = false;
+        }
+        if(typeof currentGarageData.isBlocked !== "boolean"){
+          currentGarageData.isBlocked = false;
         }
       }
 
+      if(currentGarageData.isBlocked){
+        errEl.textContent = "Ce garage est désactivé. Contacte l'administrateur.";
+        errEl.style.display='block';
+        return;
+      }
+
       currentGarageId = code;
-      currentMechanicName = mech;
 
       localStorage.setItem('gcperf_garage_code', code);
-      localStorage.setItem('gcperf_garage_mech', mech);
 
       document.getElementById('loginScreen').classList.add('hidden');
       document.getElementById('appHeader').classList.remove('hidden');
@@ -730,6 +796,13 @@
 
       initGarageUI();
       initRealtime();
+
+      if(!currentGarageData.isActive){
+        openActivationModal();
+        showBanner("Compte non activé : entre un code pour débloquer la licence.");
+      }else{
+        showBanner(null);
+      }
     }catch(e){
       console.error(e);
       errEl.textContent = "Erreur : " + (e.message || e);
@@ -741,17 +814,14 @@
     if(unsubscribe) unsubscribe();
     currentGarageId = null;
     currentGarageData = null;
-    currentMechanicName = null;
     itemsCache = [];
     document.getElementById('listBody').innerHTML='';
     document.getElementById('empty').classList.remove('hidden');
 
-    localStorage.removeItem('gcperf_garage_code');
-    localStorage.removeItem('gcperf_garage_mech');
-
     document.getElementById('appHeader').classList.add('hidden');
     document.getElementById('appMain').classList.add('hidden');
     document.getElementById('loginScreen').classList.remove('hidden');
+    showBanner(null);
   }
 
   function initGarageUI(){
@@ -800,9 +870,6 @@
       opt.textContent=m;
       sel.appendChild(opt);
     });
-    if(currentMechanicName && mechs.includes(currentMechanicName)){
-      sel.value = currentMechanicName;
-    }
   }
 
   function addMechanic(){
@@ -832,6 +899,115 @@
     document.getElementById('headerGarageName').textContent =
       (currentGarageData.name || currentGarageId) + " ("+currentGarageId+")";
     alert("Paramètres du garage enregistrés ✅");
+  }
+
+  /* ==== ACTIVATION ==== */
+  function openActivationModal(){
+    document.getElementById('activationOverlay').classList.remove('hidden');
+    document.getElementById('activationCode').value = "";
+    document.getElementById('activationErr').style.display='none';
+  }
+  function closeActivationModal(){
+    document.getElementById('activationOverlay').classList.add('hidden');
+  }
+  async function validateActivation(){
+    const code = document.getElementById('activationCode').value.trim();
+    const err = document.getElementById('activationErr');
+    err.style.display='none';
+    err.textContent='';
+
+    if(code === "08092012"){
+      await getGarageDocRef().set({
+        isActive:true,
+        activationCodeUsed:code,
+        activatedAt:Date.now()
+      },{merge:true});
+      currentGarageData.isActive = true;
+      closeActivationModal();
+      showBanner(null);
+      alert("Compte garage activé ✅");
+    }else{
+      err.textContent = "Code invalide.";
+      err.style.display='block';
+    }
+  }
+  function skipActivation(){
+    closeActivationModal();
+    showBanner("Compte non activé : mode démo / en attente de paiement.");
+  }
+
+  /* ==== MODE ADMIN (SUPER ADMIN) ==== */
+  function enterAdminMode(){
+    const pwd = prompt("Mot de passe admin :");
+    if(pwd === "08092012"){
+      isAdmin = true;
+      document.getElementById('adminPanel').classList.remove('hidden');
+      alert("Mode admin activé ✅");
+    }else if(pwd !== null){
+      alert("Mot de passe admin incorrect.");
+    }
+  }
+
+  async function adminLoadGarage(){
+    if(!isAdmin){ alert("Mode admin requis"); return; }
+    const codeRaw = document.getElementById('adminGarageCode').value.trim();
+    if(!codeRaw){ return; }
+    const code = codeRaw.toUpperCase();
+    try{
+      const ref = db.collection("garages").doc(code);
+      const snap = await ref.get();
+      const infoEl = document.getElementById('adminGarageInfo');
+      if(!snap.exists){
+        infoEl.textContent = "Aucun garage trouvé avec ce code.";
+        adminCurrentGarageCode = null;
+        adminCurrentGarageData = null;
+        return;
+      }
+      adminCurrentGarageCode = code;
+      adminCurrentGarageData = snap.data();
+      infoEl.innerHTML =
+        "Garage : <strong>"+(adminCurrentGarageData.name||code)+"</strong><br>"+
+        "Code : "+code+"<br>"+
+        "Actif : "+(adminCurrentGarageData.isActive ? "Oui" : "Non")+"<br>"+
+        "Bloqué : "+(adminCurrentGarageData.isBlocked ? "Oui" : "Non")+"<br>"+
+        "Mécaniciens : "+((adminCurrentGarageData.mechanics||[]).join(", ") || "aucun");
+    }catch(e){
+      console.error(e);
+      alert("Erreur adminLoadGarage : "+e.message);
+    }
+  }
+
+  async function adminBlockGarage(){
+    if(!isAdmin || !adminCurrentGarageCode){ alert("Charge un garage d'abord."); return; }
+    if(!confirm("Bloquer ce garage ?")) return;
+    await db.collection("garages").doc(adminCurrentGarageCode).set({isBlocked:true},{merge:true});
+    alert("Garage bloqué.");
+  }
+
+  async function adminUnblockGarage(){
+    if(!isAdmin || !adminCurrentGarageCode){ alert("Charge un garage d'abord."); return; }
+    await db.collection("garages").doc(adminCurrentGarageCode).set({isBlocked:false},{merge:true});
+    alert("Garage débloqué.");
+  }
+
+  async function adminDeleteGarage(){
+    if(!isAdmin || !adminCurrentGarageCode){ alert("Charge un garage d'abord."); return; }
+    if(!confirm("Supprimer TOUT le garage (fiches incluses) ?")) return;
+    const code = adminCurrentGarageCode;
+    try{
+      const fichesSnap = await db.collection("garages").doc(code).collection("fiches").get();
+      const batch = db.batch();
+      fichesSnap.forEach(doc=> batch.delete(doc.ref));
+      await batch.commit();
+      await db.collection("garages").doc(code).delete();
+      alert("Garage et fiches supprimés.");
+      adminCurrentGarageCode = null;
+      adminCurrentGarageData = null;
+      document.getElementById('adminGarageInfo').textContent = "";
+    }catch(e){
+      console.error(e);
+      alert("Erreur suppression garage : "+e.message);
+    }
   }
 
   /* ==== TEMPS RÉEL FICHES ==== */
@@ -955,6 +1131,7 @@
     document.getElementById('empty').classList.toggle('hidden',n>0);
   }
 
+  /* ==== AUTOSAVE ==== */
   function scheduleAutoSave(){
     const immat=(document.getElementById('f_immat')?.value||"").trim().toUpperCase();
     if(!immat || !currentGarageId) return;
@@ -962,6 +1139,7 @@
     autoSaveTimer=setTimeout(()=>saveFiche(true),1000);
   }
 
+  /* ==== ÉDITEUR ==== */
   function setupCarnet(checks){
     const okEl=document.getElementById('ce_ok');
     const badEl=document.getElementById('ce_bad');
@@ -999,12 +1177,11 @@
       document.getElementById('f_date').value=it.date||"";
       document.getElementById('f_client').value=it.client||"";
       document.getElementById('f_status').value=it.status||"en_cours";
-      document.getElementById('f_todoNow').value=(it.todoNow||[]).join("\\n");
-      document.getElementById('f_todoLater').value=(it.todoLater||[]).join("\\n");
+      document.getElementById('f_todoNow').value=(it.todoNow||[]).join("\n");
+      document.getElementById('f_todoLater').value=(it.todoLater||[]).join("\n");
       document.getElementById('f_obs').value=it.obs||"";
 
       if(it.mech){
-        fillMechanicSelect();
         const sel=document.getElementById('f_mech');
         if(Array.from(sel.options).some(o=>o.value===it.mech)) sel.value=it.mech;
       }
@@ -1016,11 +1193,6 @@
 
       document.getElementById('btnDelete').classList.remove('hidden');
     }else{
-      if(currentMechanicName){
-        fillMechanicSelect();
-        const sel=document.getElementById('f_mech');
-        if(Array.from(sel.options).some(o=>o.value===currentMechanicName)) sel.value=currentMechanicName;
-      }
       addPartRow();
       document.getElementById('btnDelete').classList.add('hidden');
       document.getElementById('f_date').value = new Date().toISOString().slice(0,10);
@@ -1043,6 +1215,7 @@
     renderList();
   }
 
+  /* ==== SAVE FICHE ==== */
   async function saveFiche(auto=false){
     if(!currentGarageId) return;
     const immat=document.getElementById('f_immat').value.trim().toUpperCase();
@@ -1073,8 +1246,8 @@
       client:document.getElementById('f_client').value,
       mech:document.getElementById('f_mech').value || '',
       status:document.getElementById('f_status').value,
-      todoNow:document.getElementById('f_todoNow').value.split("\\n").map(s=>s.trim()).filter(Boolean),
-      todoLater:document.getElementById('f_todoLater').value.split("\\n").map(s=>s.trim()).filter(Boolean),
+      todoNow:document.getElementById('f_todoNow').value.split("\n").map(s=>s.trim()).filter(Boolean),
+      todoLater:document.getElementById('f_todoLater').value.split("\n").map(s=>s.trim()).filter(Boolean),
       obs:document.getElementById('f_obs').value,
       checks:currentChecks,
       comments:currentComments,
@@ -1095,6 +1268,7 @@
     }
   }
 
+  /* ==== DELETE ==== */
   async function deleteFiche(){
     if(!currentId || !currentGarageId) return;
     if(!confirm("Supprimer cette fiche ?")) return;
@@ -1107,6 +1281,7 @@
     await getFichesColRef().doc(id).delete();
   }
 
+  /* ==== PIÈCES ==== */
   function addPartRow(ref="",label="",qte="1"){
     const tr=document.createElement('tr');
     tr.innerHTML=`
@@ -1118,6 +1293,7 @@
     document.getElementById('partsBody').appendChild(tr);
   }
 
+  /* ==== CHECKLIST ==== */
   const DEF=[
     {icon:"👁️",cat:"VISIBILITÉ",items:["Balais AV/AR","Pare-brise","Rétroviseurs"]},
     {icon:"💡",cat:"ÉCLAIRAGE",items:["Position","Croisement","Route","Stop","Antibrouillard AV/AR","Recul","Clignotants","Détresse"]},
@@ -1201,6 +1377,7 @@
     });
   }
 
+  /* ==== PNEUS ==== */
   const POS=["AVG","AVD","ARG","ARD","RS"];
   function buildTires(arr){
     currentPneus=JSON.parse(JSON.stringify(arr||[]));
@@ -1256,6 +1433,7 @@
     chev.textContent=collapsed?'►':'▼';
   }
 
+  /* ==== EXPORT JSON ==== */
   function exportJSON(){
     const blob=new Blob([JSON.stringify(itemsCache,null,2)],{type:"application/json"});
     const a=document.createElement('a');
@@ -1264,15 +1442,15 @@
     a.click();
   }
 
+  /* ==== AUTO-RECONNEXION ==== */
   window.addEventListener('load',()=>{
     const savedCode = localStorage.getItem('gcperf_garage_code');
-    const savedMech = localStorage.getItem('gcperf_garage_mech');
-    if(savedCode && savedMech){
+    if(savedCode){
       document.getElementById('g_code').value = savedCode;
-      document.getElementById('g_mech').value = savedMech;
     }
   });
 
+  /* ==== SERVICE WORKER (PWA) ==== */
   if ('serviceWorker' in navigator){
     navigator.serviceWorker.register('sw.js').catch(err=>{
       console.warn('SW registration failed',err);
